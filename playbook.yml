@@ -1,0 +1,135 @@
+- name: Initial Linux Server Setup
+  hosts: localhost
+  connection: local
+  become: true
+  vars:
+    ssh_user: support
+    ssh_port: 40022
+    ssh_pubkey: "{{ lookup('file', 'files/id_ed25519.pub') }}"
+    allowed_ports:
+      - "{{ ssh_port }}"
+      - 80
+      - 443
+
+  tasks:
+
+  - name: Update all packages
+    apt:
+      update_cache: yes
+      upgrade: dist
+    notify: Reboot system
+
+  - name: Create a new user
+    user:
+      name: "{{ ssh_user }}"
+      shell: /bin/bash
+      groups: sudo
+      create_home: yes
+
+  - name: Add SSH public key for user
+    authorized_key:
+      user: "{{ ssh_user }}"
+      state: present
+      key: "{{ ssh_pubkey }}"
+
+  - name: Change SSH port
+    lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: '^#?Port'
+      line: "Port {{ ssh_port }}"
+      state: present
+
+  - name: Disable root login
+    lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: '^#?PermitRootLogin'
+      line: 'PermitRootLogin no'
+
+  - name: Disable password authentication
+    lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: '^#?PasswordAuthentication'
+      line: 'PasswordAuthentication no'
+
+  - name: Restart SSH service
+    service:
+      name: ssh
+      state: restarted
+
+  - name: Install necessary packages
+    apt:
+      name:
+        - wget
+        - net-tools
+        - fail2ban
+        - iptables
+        - iptables-persistent
+      state: present
+
+  - name: Flush iptables rules
+    iptables:
+      table: filter
+      chain: INPUT
+      flush: yes
+
+  - name: Allow loopback interface
+    iptables:
+      chain: INPUT
+      protocol: all
+      in_interface: lo
+      jump: ACCEPT
+
+  - name: Allow established connections
+    iptables:
+      chain: INPUT
+      ctstate: ESTABLISHED,RELATED
+      jump: ACCEPT
+
+  - name: Allow allowed ports
+    iptables:
+      chain: INPUT
+      protocol: tcp
+      destination_port: "{{ item }}"
+      jump: ACCEPT
+    loop: "{{ allowed_ports }}"
+
+  - name: Drop all other incoming connections
+    iptables:
+      chain: INPUT
+      jump: DROP
+
+  - name: Save iptables rules
+    command: netfilter-persistent save
+
+  - name: Enable iptables-persistent service
+    systemd:
+      name: netfilter-persistent
+      enabled: yes
+      state: started
+
+  - name: Configure Fail2Ban jail for SSH
+    blockinfile:
+      path: /etc/fail2ban/jail.local
+      create: yes
+      block: |
+        [sshd]
+        enabled = true
+        port = {{ ssh_port }}
+        filter = sshd
+        logpath = /var/log/auth.log
+        maxretry = 3
+        bantime = 3600
+        findtime = 600
+
+  - name: Enable and start Fail2Ban
+    systemd:
+      name: fail2ban
+      enabled: yes
+      state: restarted
+
+  handlers:
+    - name: Reboot system
+      reboot:
+        msg: "Reboot initiated by Ansible after package upgrade"
+        connect_timeout: 5
+        reboot_timeout: 600
