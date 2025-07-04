@@ -5,7 +5,9 @@
   vars:
     ssh_user: support
     ssh_port: 40022
-    ssh_pubkey: "{{ lookup('file', 'files/id_ed25519.pub') }}"
+    ssh_pubkey:
+      - "{{ lookup('file', 'files/id_ed25519_1.pub') }}"
+      - "{{ lookup('file', 'files/id_ed25519_2.pub') }}"
     allowed_ports:
       - "{{ ssh_port }}"
       - 80
@@ -26,11 +28,12 @@
       groups: sudo
       create_home: yes
 
-  - name: Add SSH public key for user
+  - name: Add multiple SSH public keys
     authorized_key:
       user: "{{ ssh_user }}"
+      key: "{{ item }}"
       state: present
-      key: "{{ ssh_pubkey }}"
+    loop: "{{ ssh_pubkeys }}"
 
   - name: Change SSH port
     lineinfile:
